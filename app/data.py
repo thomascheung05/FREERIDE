@@ -11,10 +11,10 @@ from PIL import Image
 from io import BytesIO 
 import csv 
 import os 
-import win32gui, win32ui, ctypes 
 from PIL import Image 
 import pyautogui 
-import pytesseract                      
+import pytesseract    
+import datetime                  
 APP_FOLDER_PATH = Path(__file__).parent
 STATIC_FOLDER_PATH = APP_FOLDER_PATH.parent / 'static'
 USER_SAVE_FOLDER_PATH = APP_FOLDER_PATH.parent / 'usersaves'
@@ -391,8 +391,19 @@ def get_streetview_image_from_coord(coord_row, fov=90, pitch=0, size="640x640"):
 # $$$$$$$  |\$$$$$$$ | \$$$$  |\$$$$$$$ |                                               
 # \_______/  \_______|  \____/  \_______|                                               
                                                                                       
-                                                                                      
-                                                                                      
+########################################################################
+# WINDOWS SCREEN CAP    
+import platform
+
+IS_WINDOWS = platform.system() == "Windows"
+if IS_WINDOWS:
+    import win32gui # type: ignore
+    import win32ui # type: ignore
+    import ctypes 
+else:
+    import Quartz  # type: ignore
+    import Quartz.CoreGraphics as CG # type: ignore
+########################################################################                                                                       
 def list_visible_windows():
     def enum_windows(hwnd, results):
         if win32gui.IsWindowVisible(hwnd):
@@ -409,10 +420,6 @@ def list_visible_windows():
         for hwnd, title in windows:
             print(f"HWND: {hwnd}, Title: {title}")
     return windows
-
-
-
-
 
 def get_window_relative_bbox(window_title):
     # Find the window
@@ -444,16 +451,14 @@ def get_window_relative_bbox(window_title):
 
     bbox = (rel_left, rel_top, rel_right, rel_bottom)
     print(f"Bounding box relative to window: {bbox}")
-    dist_cropped_img, speed_cropped_img, window_not_found_flag = capture_window_region(window_title, bbox, speed_bbox= None)
+    cropped_img, window_not_found_flag = capture_window_region(window_title, bbox)
 
-    return bbox, dist_cropped_img
+    return bbox, cropped_img
 
-
-
-###!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################
+###################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################
 # This should only input 1 bounding box, and output 1 image, should call fucntion multiple times if we want distance and speed
-###!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!#####################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################
-def capture_window_region(title, dist_bbox, speed_bbox):
+########################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################################
+def capture_window_region(title, bbox):
     hwnd = win32gui.FindWindow(None, title) # stores the window in this variable
 
     window_not_found_flag = False
@@ -476,29 +481,21 @@ def capture_window_region(title, dist_bbox, speed_bbox):
     ctypes.windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), PW_RENDERFULLCONTENT) #PrintWindow is a Windows function that copies the actual window content into a DC. PW_RENDERFULLCONTENT ensures the entire content is rendered, even if the window is partially offscreen. saveDC.GetSafeHdc() gets a handle to our memory DC so Windows knows where to draw.
 
     bmpinfo = bmp.GetInfo() # gets infor on bitmap like widht and height
-    bmpstr = bmp.GetBitmapBits(True)    # Extracts raw pixel data
+    bmpstr = bmp.GetBitmapBits(True)   # Extracts raw pixel data
     img = Image.frombuffer( # converts to pillow image
         'RGB',
         (bmpinfo['bmWidth'], bmpinfo['bmHeight']),
         bmpstr, 'raw', 'BGRX', 0, 1
     )
 
+    cropped_image = img.crop(bbox)    # crops the image to only the bounding box
     
-    dist_cropped_img = img.crop(dist_bbox)    # crops the image to only the bounding box
-    speed_cropped_img = img.crop(speed_bbox)
-
-           
-
     win32gui.DeleteObject(bmp.GetHandle())
     saveDC.DeleteDC()
     mfcDC.DeleteDC()
     win32gui.ReleaseDC(hwnd, hwndDC)
 
-    return dist_cropped_img, speed_cropped_img, window_not_found_flag
-
-
-
-
+    return cropped_image
 
 def extract_number_from_image(img):
     tesseract_path = APP_FOLDER_PATH.parent / "Tesseract" / "tesseract.exe"
@@ -510,13 +507,10 @@ def extract_number_from_image(img):
     except ValueError:
         return None
     
-
-
-
-
 def get_data_once(window_title, distbbox, speedbbox, distance_units):
 
-    dist_img, speed_img, window_not_found_flag = capture_window_region(window_title, distbbox, speedbbox)
+    dist_img, window_not_found_flag = capture_window_region(window_title, distbbox)
+    speed_img, window_not_found_flag = capture_window_region(window_title, speedbbox)
 
     if window_not_found_flag == True:
         return None, None, window_not_found_flag
@@ -539,8 +533,126 @@ def get_data_once(window_title, distbbox, speedbbox, distance_units):
     return distance, None, window_not_found_flag
 
 
+########################################################################
+# Mac Screen Capture
+########################################################################
 
 
+def find_qt_window():
+    windows = Quartz.CGWindowListCopyWindowInfo(
+        Quartz.kCGWindowListOptionOnScreenOnly,
+        Quartz.kCGNullWindowID
+    )
+
+
+    for w in windows:
+        if w.get("kCGWindowOwnerName") == "QuickTime Player":
+            return w
+
+    return None
+
+
+def capture_qt_window_region(bbox):
+    """
+    bbox = (left, top, right, bottom) relative to QuickTime window
+    """
+    qt_window = find_qt_window()
+    if not qt_window:
+        print("QuickTime Player window not found")
+        return None, True
+
+    bounds = qt_window["kCGWindowBounds"]
+    win_x = int(bounds["X"])
+    win_y = int(bounds["Y"])
+    win_w = int(bounds["Width"])
+    win_h = int(bounds["Height"])
+
+    left, top, right, bottom = bbox
+
+    # Convert to absolute screen coords
+    abs_left = win_x + left
+    abs_top = win_y + top
+    abs_width = right - left
+    abs_height = bottom - top
+
+    rect = Quartz.CGRectMake(abs_left, abs_top, abs_width, abs_height)
+
+    image_ref = Quartz.CGWindowListCreateImage(
+        rect,
+        Quartz.kCGWindowListOptionOnScreenOnly,
+        Quartz.kCGNullWindowID,
+        Quartz.kCGWindowImageDefault
+    )
+
+    if not image_ref:
+        print("Failed to capture screen region")
+        return None, False
+
+    width = Quartz.CGImageGetWidth(image_ref)
+    height = Quartz.CGImageGetHeight(image_ref)
+
+    data = Quartz.CGDataProviderCopyData(
+        Quartz.CGImageGetDataProvider(image_ref)
+    )
+    
+
+    bytes_per_row = CG.CGImageGetBytesPerRow(image_ref) 
+    img = Image.frombuffer(
+        "RGBA",
+        (width, height),
+        data,
+        "raw",
+        "BGRA",
+        bytes_per_row,
+        1
+    )
+
+    return img, False
+
+
+def get_qt_relative_bbox():
+    qt_window = find_qt_window()
+    if not qt_window:
+        print("QuickTime Player window not found!")
+        return None, None
+
+    bounds = qt_window["kCGWindowBounds"]
+
+    win_x = int(bounds["X"])
+    win_y = int(bounds["Y"])
+    win_w = int(bounds["Width"])
+    win_h = int(bounds["Height"])
+
+    print(f"QuickTime window bounds: x={win_x}, y={win_y}, w={win_w}, h={win_h}")
+
+    # Let user pick bbox visually
+    print("Move mouse to TOP-LEFT of the number and wait 3 seconds...")
+    time.sleep(3)
+    abs_left, abs_top = pyautogui.position()
+    print(f"Top-left: {abs_left}, {abs_top}")
+
+    print("Move mouse to BOTTOM-RIGHT of the number and wait 3 seconds...")
+    time.sleep(3)
+    abs_right, abs_bottom = pyautogui.position()
+    print(f"Bottom-right: {abs_right}, {abs_bottom}")
+
+    # Convert screen coords → window-relative coords
+    rel_left = abs_left - win_x
+    rel_top = abs_top - win_y
+    rel_right = abs_right - win_x
+    rel_bottom = abs_bottom - win_y
+
+    bbox = (rel_left, rel_top, rel_right, rel_bottom)
+    print(f"Bounding box relative to QuickTime window: {bbox}")
+
+    cropped_img, window_not_found_flag = capture_qt_window_region(bbox)
+
+    return bbox, cropped_img
+# bbox, cropped_img = get_qt_relative_bbox()
+# desktop = Path.home() / "Desktop"
+# out_path = desktop / f"quicktime_crop_1.png"
+# cropped_img.save(out_path)
+# print(f"Saved cropped image to: {out_path}")
 
 
 
@@ -558,10 +670,7 @@ def get_data_once(window_title, distbbox, speedbbox, distance_units):
 # $$  __$$\ $$ |      $$  __|            
 # $$ |  $$ |$$ |      $$ |               
 # $$$$$$$  |$$$$$$$$\ $$$$$$$$\          
-# \_______/ \________|\________|         
-                                       
-                                       
-                                       
+# \_______/ \________|\________|                                                   
 # $$$$$$$\             $$\               
 # $$  __$$\            $$ |              
 # $$ |  $$ | $$$$$$\ $$$$$$\    $$$$$$\  
